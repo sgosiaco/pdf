@@ -1,4 +1,6 @@
-import { app, BrowserWindow, nativeTheme, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, nativeTheme, ipcMain, shell, dialog } from 'electron'
+import { promises, fstat } from 'fs'
+import { PDFDocument, degrees } from 'pdf-lib'
 
 try {
   if (process.platform === 'win32' && nativeTheme.shouldUseDarkColors === true) {
@@ -77,17 +79,68 @@ ipcMain.handle('window', async (event, arg) => {
 })
 
 ipcMain.handle('PDF', async (event, command, obj) => {
+  console.log(obj)
   switch (command) {
     case 'add':
-      console.log(obj)
-      break
+      return await addPDF()
     case 'combine':
-      break
+      return await combinePDF(obj.files)
     case 'rotate':
-      break
-    case 'open':
-      shell.showItemInFolder(obj.dir)
-      break
+      return await rotatePDF(obj.file, obj.angle)
     default: break
   }
 })
+
+const addPDF = async () => {
+  return await dialog.showOpenDialog({
+    title: 'Select PDF to combine',
+    filters: [{ name: 'PDF', extensions: ['pdf'] }],
+    properties: ['openFile']
+  })
+}
+
+const combinePDF = async (files) => {
+  const saveDir = await dialog.showSaveDialog({ filters: [{ name: 'PDF', extensions: ['pdf'] }] }, { properties: ['openFile'] })
+  if (saveDir.canceled) {
+    dialog.showErrorBox('Please select a file to save to!', 'Please select a file to save to!')
+    return saveDir
+  }
+
+  const output = await PDFDocument.create()
+
+  for (const file of files) {
+    const bytes = await promises.readFile(file)
+    const pdf = await PDFDocument.load(bytes)
+    const donor = await output.copyPages(pdf, Array.from({ length: pdf.getPageCount() }, (v, i) => i))
+    donor.forEach(page => {
+      output.addPage(page)
+    })
+  }
+
+  const outputBytes = await output.save()
+  await promises.writeFile(saveDir.filePath, outputBytes)
+  shell.showItemInFolder(saveDir.filePath)
+  return saveDir
+}
+
+const rotatePDF = async (file, angle) => {
+  const saveDir = await dialog.showSaveDialog({ filters: [{ name: 'PDF', extensions: ['pdf'] }] }, { properties: ['openFile'] })
+  if (saveDir.canceled) {
+    dialog.showErrorBox('Please select a file to save to!', 'Please select a file to save to!')
+    return saveDir
+  }
+  const output = await PDFDocument.create()
+
+  const bytes = await promises.readFile(file)
+  const pdf = await PDFDocument.load(bytes)
+  const donor = await output.copyPages(pdf, Array.from({ length: pdf.getPageCount() }, (v, i) => i))
+  donor.forEach(page => {
+    const newAngle = (page.getRotation().angle + angle) % 360
+    page.setRotation(degrees(newAngle))
+    output.addPage(page)
+  })
+  const outputBytes = await output.save()
+  await promises.writeFile(saveDir.filePath, outputBytes)
+  shell.showItemInFolder(saveDir.filePath)
+  return saveDir
+}
