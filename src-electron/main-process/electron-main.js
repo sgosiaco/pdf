@@ -1,5 +1,6 @@
 import { app, BrowserWindow, nativeTheme, ipcMain, shell, dialog } from 'electron'
-import { promises, fstat } from 'fs'
+import { promises } from 'fs'
+import path from 'path'
 import { PDFDocument, degrees } from 'pdf-lib'
 
 try {
@@ -86,9 +87,13 @@ ipcMain.handle('PDF', async (event, command, obj) => {
     case 'combine':
       return await combinePDF(obj.files)
     case 'rotate':
-      return await rotatePDF(obj.file, obj.angle)
+      return await rotatePDF(obj.files)
     default: break
   }
+})
+
+ipcMain.handle('path', async (event, dir) => {
+  return path.basename(dir)
 })
 
 const addPDF = async () => {
@@ -100,7 +105,7 @@ const addPDF = async () => {
 }
 
 const combinePDF = async (files) => {
-  const saveDir = await dialog.showSaveDialog({ filters: [{ name: 'PDF', extensions: ['pdf'] }] }, { properties: ['openFile'] })
+  const saveDir = await dialog.showSaveDialog({ filters: [{ name: 'PDF', extensions: ['pdf'] }] })
   if (saveDir.canceled) {
     dialog.showErrorBox('Please select a file to save to!', 'Please select a file to save to!')
     return saveDir
@@ -109,10 +114,14 @@ const combinePDF = async (files) => {
   const output = await PDFDocument.create()
 
   for (const file of files) {
-    const bytes = await promises.readFile(file)
+    const bytes = await promises.readFile(file.path)
     const pdf = await PDFDocument.load(bytes)
     const donor = await output.copyPages(pdf, Array.from({ length: pdf.getPageCount() }, (v, i) => i))
     donor.forEach(page => {
+      if (file.angle > 0) {
+        const newAngle = (page.getRotation().angle + file.angle) % 360
+        page.setRotation(degrees(newAngle))
+      }
       output.addPage(page)
     })
   }
@@ -123,24 +132,30 @@ const combinePDF = async (files) => {
   return saveDir
 }
 
-const rotatePDF = async (file, angle) => {
-  const saveDir = await dialog.showSaveDialog({ filters: [{ name: 'PDF', extensions: ['pdf'] }] }, { properties: ['openFile'] })
+const rotatePDF = async (files) => {
+  // const saveDir = await dialog.showSaveDialog({ filters: [{ name: 'PDF', extensions: ['pdf'] }] }, { properties: ['openFile'] })
+  const saveDir = await dialog.showOpenDialog({ properties: ['openDirectory'] })
   if (saveDir.canceled) {
     dialog.showErrorBox('Please select a file to save to!', 'Please select a file to save to!')
     return saveDir
   }
-  const output = await PDFDocument.create()
 
-  const bytes = await promises.readFile(file)
-  const pdf = await PDFDocument.load(bytes)
-  const donor = await output.copyPages(pdf, Array.from({ length: pdf.getPageCount() }, (v, i) => i))
-  donor.forEach(page => {
-    const newAngle = (page.getRotation().angle + angle) % 360
-    page.setRotation(degrees(newAngle))
-    output.addPage(page)
-  })
-  const outputBytes = await output.save()
-  await promises.writeFile(saveDir.filePath, outputBytes)
-  shell.showItemInFolder(saveDir.filePath)
+  for (const file of files) {
+    const output = await PDFDocument.create()
+    const bytes = await promises.readFile(file.path)
+    const pdf = await PDFDocument.load(bytes)
+    const donor = await output.copyPages(pdf, Array.from({ length: pdf.getPageCount() }, (v, i) => i))
+    donor.forEach(page => {
+      const newAngle = (page.getRotation().angle + file.angle) % 360
+      page.setRotation(degrees(newAngle))
+      output.addPage(page)
+    })
+    const outputBytes = await output.save()
+    const newName = `${file.name.substr(0, file.name.length - 4)}_ROTATED.pdf`
+    const outPath = path.join(saveDir.filePaths[0], newName)
+    await promises.writeFile(outPath, outputBytes)
+  }
+  shell.openPath(saveDir.filePaths[0])
+
   return saveDir
 }
